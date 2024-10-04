@@ -13,6 +13,7 @@
     import { Toaster, toast } from 'svelte-sonner'
     import { Loader2, Clipboard, Trash2, ExternalLink } from "lucide-svelte";
     import { Button } from "$lib/components/ui/button";
+    import { copyToClipboard } from "$lib/utils";
     
     interface UrlEntry {
         id: string;
@@ -31,6 +32,7 @@
         if (savedHistory) {
             urlHistory = JSON.parse(savedHistory);
         }
+        localStorage.setItem("userId", crypto.randomUUID())
         console.log(urlHistory.at(0)?.clickCount)
     });
 
@@ -39,6 +41,7 @@
     }
 
     async function shortenUrl(): Promise<void> {
+        // TODO: Update 
         if (!url) {
             toast.error("Please enter a URL");
             return;
@@ -51,7 +54,7 @@
         isLoading = true;
 
         try {
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+            // await new Promise((resolve) => setTimeout(resolve, 1000));
             
             // MOCK API
             const newEntry: UrlEntry = {
@@ -71,11 +74,6 @@
         } finally {
             isLoading = false;
         }
-    }
-
-    async function copyToClipboard(shortUrl: string): Promise<void> {
-        await navigator.clipboard.writeText(shortUrl);
-        toast.success("Copied to clipboard!");
     }
 
     function deleteUrl(id: string) {
