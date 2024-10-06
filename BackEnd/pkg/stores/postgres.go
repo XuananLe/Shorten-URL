@@ -35,5 +35,6 @@ func InitPostgres() *Postgres {
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Println("Postgres Connected")
 	return PostgresClient
 }
