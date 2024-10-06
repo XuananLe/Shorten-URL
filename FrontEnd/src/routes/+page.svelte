@@ -10,61 +10,69 @@
         TableHeader,
         TableRow,
     } from "$lib/components/ui/table";
-    import { Toaster, toast } from 'svelte-sonner'
+    import { Toaster, toast } from "svelte-sonner";
     import { Loader2, Clipboard, Trash2, ExternalLink } from "lucide-svelte";
     import { Button } from "$lib/components/ui/button";
     import { copyToClipboard } from "$lib/utils";
-    
-    interface UrlEntry {
-        id: string;
-        originalUrl: string;
-        shortUrl: string;
-        createdAt: string;
-        clickCount: number;
-    }
+    import { FRONTEND_URL, type UrlEntry } from "$lib";
+    import ky from "ky";
 
     let url = "";
     let isLoading = false;
     let urlHistory: UrlEntry[] = [];
 
     onMount(() => {
-        const savedHistory = localStorage.getItem('urlHistory');
+        const savedHistory = localStorage.getItem("urlHistory");
         if (savedHistory) {
             urlHistory = JSON.parse(savedHistory);
         }
-        localStorage.setItem("userId", crypto.randomUUID())
-        console.log(urlHistory.at(0)?.clickCount)
-    });
 
+        const existingUserId = localStorage.getItem("userId");
+
+        if (!existingUserId) {
+            const newUserId = crypto.randomUUID();
+            localStorage.setItem("userId", newUserId);
+
+            ky.post('/api/users', {
+                json: {
+                    userId: newUserId,
+                },
+            }).catch((error) => {
+                console.error("Failed to register new user:", error);
+            });
+        }
+    });
     function saveHistory() {
-        localStorage.setItem('urlHistory', JSON.stringify(urlHistory));
+        localStorage.setItem("urlHistory", JSON.stringify(urlHistory));
     }
 
     async function shortenUrl(): Promise<void> {
-        // TODO: Update 
+        // TODO: Update
         if (!url) {
             toast.error("Please enter a URL");
             return;
         }
 
-        if (!url.startsWith('http://') && !url.startsWith('https://')) {
-            url = 'https://' + url;
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            url = "https://" + url;
         }
 
         isLoading = true;
 
         try {
-            // await new Promise((resolve) => setTimeout(resolve, 1000));
-            
-            // MOCK API
+            console.log(`Creating URL ${url} ${localStorage.getItem("userId")}`)
+            const data : any = await ky.post(`/api/url?url=${url}&userId=${localStorage.getItem("userId")}`).json();
+
+            console.log(data);
+
             const newEntry: UrlEntry = {
                 id: Math.random().toString(36).substr(2, 9),
                 originalUrl: url,
-                shortUrl: `https://tiny.url/${Math.random().toString(36).substr(2, 6)}`,
+                shortUrl: `${FRONTEND_URL}/${data.shortUrl}`,
                 createdAt: new Date().toISOString(),
-                clickCount: 0
+                clickCount: 0,
             };
-            
+
             urlHistory = [newEntry, ...urlHistory];
             saveHistory();
             url = "";
@@ -77,13 +85,13 @@
     }
 
     function deleteUrl(id: string) {
-        urlHistory = urlHistory.filter(entry => entry.id !== id);
+        urlHistory = urlHistory.filter((entry) => entry.id !== id);
         saveHistory();
         toast.success("URL deleted from history");
     }
 
     function simulateClick(id: string) {
-        urlHistory = urlHistory.map(entry => {
+        urlHistory = urlHistory.map((entry) => {
             if (entry.id === id) {
                 return { ...entry, clickCount: entry.clickCount + 1 };
             }
@@ -110,8 +118,8 @@
                     placeholder="Enter your long URL"
                     bind:value={url}
                 />
-                <Button 
-                    on:click={shortenUrl} 
+                <Button
+                    on:click={shortenUrl}
                     disabled={isLoading}
                     class="whitespace-nowrap"
                 >
@@ -134,26 +142,40 @@
                             <TableRow>
                                 <TableHead>Original URL</TableHead>
                                 <TableHead>Short URL</TableHead>
-                                <TableHead class="text-center">Clicks</TableHead>
+                                <TableHead class="text-center">Clicks</TableHead
+                                >
                                 <TableHead>Created At</TableHead>
-                                <TableHead class="text-right">Actions</TableHead>
+                                <TableHead class="text-right">Actions</TableHead
+                                >
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {#each urlHistory as entry}
                                 <TableRow>
-                                    <TableCell class="font-medium truncate max-w-[200px]" title={entry.originalUrl}>
+                                    <TableCell
+                                        class="font-medium truncate max-w-[200px]"
+                                        title={entry.originalUrl}
+                                    >
                                         {entry.originalUrl}
                                     </TableCell>
                                     <TableCell>{entry.shortUrl}</TableCell>
-                                    <TableCell class="text-center">{entry.clickCount}</TableCell>
-                                    <TableCell>{formatDate(entry.createdAt)}</TableCell>
+                                    <TableCell class="text-center"
+                                        >{entry.clickCount}</TableCell
+                                    >
+                                    <TableCell
+                                        >{formatDate(
+                                            entry.createdAt,
+                                        )}</TableCell
+                                    >
                                     <TableCell class="text-right">
                                         <div class="flex justify-end space-x-2">
                                             <Button
                                                 variant="outline"
                                                 size="icon"
-                                                on:click={() => copyToClipboard(entry.shortUrl)}
+                                                on:click={() =>
+                                                    copyToClipboard(
+                                                        entry.shortUrl,
+                                                    )}
                                             >
                                                 <Clipboard class="h-4 w-4" />
                                             </Button>
@@ -162,7 +184,10 @@
                                                 size="icon"
                                                 on:click={() => {
                                                     simulateClick(entry.id);
-                                                    window.open(entry.originalUrl, '_blank');
+                                                    window.open(
+                                                        entry.shortUrl,
+                                                        "_blank",
+                                                    );
                                                 }}
                                             >
                                                 <ExternalLink class="h-4 w-4" />
@@ -170,7 +195,8 @@
                                             <Button
                                                 variant="outline"
                                                 size="icon"
-                                                on:click={() => deleteUrl(entry.id)}
+                                                on:click={() =>
+                                                    deleteUrl(entry.id)}
                                             >
                                                 <Trash2 class="h-4 w-4" />
                                             </Button>
@@ -185,4 +211,3 @@
         </Card>
     {/if}
 </div>
-

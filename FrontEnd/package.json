@@ -24,6 +24,7 @@
 	"dependencies": {
 		"bits-ui": "^0.21.15",
 		"clsx": "^2.1.1",
+		"ky": "^1.7.2",
 		"lucide-svelte": "^0.447.0",
 		"svelte-sonner": "^0.3.28",
 		"tailwind-merge": "^2.5.2",
