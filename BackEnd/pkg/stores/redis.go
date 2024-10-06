@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"fmt"
 	"shorten-url/backend/pkg/utils"
 	"strconv"
 	"sync"
@@ -19,7 +20,7 @@ func InitRedis(maxMemory string, evictionStrategy string) *redis.Client {
 		redisConfig := utils.LoadEnv().Redis
 		DB, err := strconv.Atoi(redisConfig.REDIS_DB)
 		if err != nil {
-			log.Fatal(err)
+			log.Error(err)
 		}
 		RedisClient = redis.NewClient(&redis.Options{
 			Addr:     redisConfig.REDIS_HOST + ":" + redisConfig.REDIS_PORT,
@@ -34,6 +35,7 @@ func InitRedis(maxMemory string, evictionStrategy string) *redis.Client {
 		if err != nil {
 			log.Fatalf("Failed to set Redis maxmemory-policy: %v", err)
 		}
+		fmt.Println("Redis Connected");
 	})
 	return RedisClient
 }

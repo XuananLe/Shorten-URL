@@ -7,9 +7,8 @@ import (
 	"shorten-url/backend/pkg/services"
 	"shorten-url/backend/pkg/stores"
 	"shorten-url/backend/pkg/utils"
-
+	"strconv"
 	log "github.com/sirupsen/logrus"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -46,22 +45,23 @@ func main() {
 			return
 		}
 
-		originalURL, _ := services.UrlServiceInstance.GetURL(shortenedURL);
+		originalURL, _ := services.UrlServiceInstance.GetURL(shortenedURL)
 
 		if originalURL == nil {
-			http.Error(w, "Not Found Your URL", http.StatusNotFound);
-			return;
+			http.Error(w, "Not Found Your URL", http.StatusNotFound)
+			return
 		}
 
 		if err := services.UrlServiceInstance.IncrementClicks(shortenedURL); err != nil {
-			log.Error(err);
+			log.Error(err)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		
+
 		json.NewEncoder(w).Encode(map[string]string{
-			"original_url": originalURL.Original,
+			"originalUrl": originalURL.Original,
 		})
+		// http.Redirect(w, r, originalURL.Original, http.StatusSeeOther)
 	})
 
 	r.Post("/create", func(w http.ResponseWriter, r *http.Request) {
@@ -76,18 +76,34 @@ func main() {
 			return
 		}
 
-		shortenedID := utils.Hash(url);
+		shortenedID := utils.Hash(url)
 		err := services.UrlServiceInstance.CreateURL(shortenedID, url, userId)
 		if err != nil {
 			log.Errorf("Failed to create URL: %v", err)
 			http.Error(w, "Failed to create URL", http.StatusInternalServerError)
 			return
 		}
-		w.WriteHeader(http.StatusCreated);
+		w.WriteHeader(http.StatusCreated)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
-			"shortened_id": shortenedID,
+			"shortUrl": shortenedID,
 		})
+	})
+
+	r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
+		var user services.User;
+		err := json.NewDecoder(r.Body).Decode(&user);
+		if err != nil {
+            http.Error(w, "Invalid request payload", http.StatusBadRequest)
+            return
+        }
+        log.Printf("Received userId: %s", user.UserID)
+		if err := services.UrlServiceInstance.CreateUser(user.UserID); err != nil {
+			log.Error(err)
+			http.Error(w, err.Error(), http.StatusBadRequest);
+			return;
+		}
+        w.Write([]byte("User ID created successfully"))
 	})
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +117,7 @@ func main() {
 	err := http.ListenAndServe(":"+utils.Config.Server.SERVER_PORT, r)
 	if err != nil {
 		log.Fatal(err)
-	} else {
-		fmt.Printf("\"Serving at port\": %v\n", "Serving at port"+string(3000))
-	}
+	} 
+	fmt.Printf("\"Serving at port\": %v\n", "Serving at port "+ strconv.Itoa(3000))
+	
 }

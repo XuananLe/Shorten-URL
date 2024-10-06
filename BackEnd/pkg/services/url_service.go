@@ -3,22 +3,26 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"github.com/google/uuid"
 	"fmt"
 	"shorten-url/backend/pkg/db/sqlc"
 	"shorten-url/backend/pkg/stores"
+	"shorten-url/backend/pkg/utils"
 	"time"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 )
 
+type User struct {
+	UserID string `json:"userId"`
+}
 type CachedURL struct {
 	Original  string    `json:"original"`
 	Clicks    int       `json:"clicks"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiredAt time.Time `json:"expired_at,omitempty"`
-	UserID    string     `json:"user_id,omitempty"`
+	UserID    string    `json:"user_id,omitempty"`
 }
 
 type UrlService struct {
@@ -37,7 +41,7 @@ func NewUrlService(redisClient *redis.Client, postgresClient *stores.Postgres) *
 		redisClient:    redisClient,
 		postgresClient: postgresClient,
 	}
-	return UrlServiceInstance;
+	return UrlServiceInstance
 }
 
 func (s *UrlService) GetURL(shortenedURL string) (*CachedURL, error) {
@@ -76,7 +80,6 @@ func (s *UrlService) IncrementClicks(shortenedURL string) error {
 	return nil
 }
 
-
 func (s *UrlService) CreateURL(shortenedURL, originalURL string, userIDStr string) error {
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
@@ -103,6 +106,20 @@ func (s *UrlService) CreateURL(shortenedURL, originalURL string, userIDStr strin
 	}
 	if err := s.setCache(shortenedURL, cachedURL); err != nil {
 		log.Errorf("Failed to set cache for new URL %s: %v", shortenedURL, err)
+	}
+
+	return nil
+}
+
+func (s *UrlService) CreateUser(userIDStr string) error {
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		return fmt.Errorf(err.Error())
+	}
+	err = s.postgresClient.Queries.InsertUser(context.Background(), utils.ConvertFromUuidPg(userID))
+
+	if err != nil {
+		return fmt.Errorf(err.Error())
 	}
 
 	return nil

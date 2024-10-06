@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func Hash(originalURL string) string {
@@ -19,4 +22,15 @@ func Hash(originalURL string) string {
 	shortened := encoded[:8]
 
 	return shortened
+}
+
+func ConvertFromUuidPg(id uuid.UUID) pgtype.UUID {
+    return pgtype.UUID{
+        Bytes: id,
+        Valid: true,
+    }
+}
+
+func ConvertFromPgUuid(id pgtype.UUID) uuid.UUID {
+    return id.Bytes
 }
