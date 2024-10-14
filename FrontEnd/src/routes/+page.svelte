@@ -13,10 +13,10 @@
     import { Toaster, toast } from "svelte-sonner";
     import { Loader2, Clipboard, Trash2, ExternalLink } from "lucide-svelte";
     import { Button } from "$lib/components/ui/button";
-    import { copyToClipboard } from "$lib/utils";
+    import { convertToLocalTime, copyToClipboard } from "$lib/utils";
     import { FRONTEND_URL, type UrlEntry } from "$lib";
     import ky from "ky";
-
+    
     let url = "";
     let isLoading = false;
     let urlHistory: UrlEntry[] = [];
@@ -69,7 +69,7 @@
                 id: Math.random().toString(36).substr(2, 9),
                 originalUrl: url,
                 shortUrl: `${FRONTEND_URL}/${data.shortUrl}`,
-                createdAt: new Date().toISOString(),
+                createdAt: convertToLocalTime(data.createdAt as string),
                 clickCount: 0,
             };
 
