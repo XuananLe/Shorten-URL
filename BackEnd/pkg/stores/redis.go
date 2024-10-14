@@ -4,38 +4,60 @@ import (
 	"context"
 	"fmt"
 	"shorten-url/backend/pkg/utils"
-	"strconv"
-	"sync"
-
-	log "github.com/sirupsen/logrus"
+	"time"
 
 	"github.com/redis/go-redis/v9"
+	log "github.com/sirupsen/logrus"
 )
 
-var RedisClient *redis.Client
-var once sync.Once
+var RedisCluster *redis.ClusterClient
 
-func InitRedis(maxMemory string, evictionStrategy string) *redis.Client {
-	once.Do(func() {
-		redisConfig := utils.LoadEnv().Redis
-		DB, err := strconv.Atoi(redisConfig.REDIS_DB)
-		if err != nil {
-			log.Error(err)
-		}
-		RedisClient = redis.NewClient(&redis.Options{
-			Addr:     redisConfig.REDIS_HOST + ":" + redisConfig.REDIS_PORT,
-			Password: redisConfig.REDIS_PASS,
-			DB:       DB,
-		})
-		_, err = RedisClient.ConfigSet(context.Background(), "maxmemory", maxMemory).Result()
-		if err != nil {
-			log.Fatalf("Failed to set Redis maxmemory: %v", err)
-		}
-		_, err = RedisClient.ConfigSet(context.Background(), "maxmemory-policy", evictionStrategy).Result()
-		if err != nil {
-			log.Fatalf("Failed to set Redis maxmemory-policy: %v", err)
-		}
-		fmt.Println("Redis Connected");
+func InitRedis(maxMemory string, evictionStrategy string) *redis.ClusterClient {
+	redisConfig := utils.LoadEnv().Redis.RedisClusterNodes
+
+	RedisCluster = redis.NewClusterClient(&redis.ClusterOptions{
+		Addrs:         redisConfig,
+		RouteByLatency: true,
+		ReadOnly:       true,
+		PoolSize:       10,
+		MinIdleConns:   5,
+		DialTimeout:    5 * time.Second,
+		ReadTimeout:    3 * time.Second,
+		WriteTimeout:   3 * time.Second,
 	})
-	return RedisClient
+
+	ctx := context.Background()
+
+	_, err := RedisCluster.Ping(ctx).Result()
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis Cluster: %v", err)
+	}
+
+	err = setClusterConfig(ctx, RedisCluster, "maxmemory", maxMemory)
+	if err != nil {
+		log.Fatalf("Failed to set Redis Cluster maxmemory: %v", err)
+	}
+
+	err = setClusterConfig(ctx, RedisCluster, "maxmemory-policy", evictionStrategy)
+	if err != nil {
+		log.Fatalf("Failed to set Redis Cluster maxmemory-policy: %v", err)
+	}
+
+	fmt.Println("Redis Cluster Connected")
+	return RedisCluster
+}
+
+func setClusterConfig(ctx context.Context, client *redis.ClusterClient, key, value string) error {
+	var firstErr error
+	err := client.ForEachShard(ctx, func(ctx context.Context, shard *redis.Client) error {
+		_, err := shard.ConfigSet(ctx, key, value).Result()
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return firstErr
 }

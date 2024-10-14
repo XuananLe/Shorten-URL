@@ -7,6 +7,5 @@ export async function load({ params }) {
 
   const data : any = await ky.get(`${API_GATEWAY}/short/${id}`).json();
 
-
   throw redirect(307, data.originalUrl);
 }

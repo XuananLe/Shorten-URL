@@ -156,9 +156,10 @@ func (q *Queries) IncrementClicks(ctx context.Context, shortened string) error {
 	return err
 }
 
-const insertURL = `-- name: InsertURL :exec
-INSERT INTO urls (shortened, original, clicks, created_at, expired_at, user_id) 
+const insertURL = `-- name: InsertURL :one
+INSERT INTO urls (shortened, original, clicks, created_at, expired_at, user_id)
 VALUES ($1, $2, 0, DEFAULT, DEFAULT, $3)
+RETURNING shortened, original, clicks, created_at, expired_at, user_id
 `
 
 type InsertURLParams struct {
@@ -167,9 +168,18 @@ type InsertURLParams struct {
 	UserID    pgtype.UUID
 }
 
-func (q *Queries) InsertURL(ctx context.Context, arg InsertURLParams) error {
-	_, err := q.db.Exec(ctx, insertURL, arg.Shortened, arg.Original, arg.UserID)
-	return err
+func (q *Queries) InsertURL(ctx context.Context, arg InsertURLParams) (Url, error) {
+	row := q.db.QueryRow(ctx, insertURL, arg.Shortened, arg.Original, arg.UserID)
+	var i Url
+	err := row.Scan(
+		&i.Shortened,
+		&i.Original,
+		&i.Clicks,
+		&i.CreatedAt,
+		&i.ExpiredAt,
+		&i.UserID,
+	)
+	return i, err
 }
 
 const insertUser = `-- name: InsertUser :exec

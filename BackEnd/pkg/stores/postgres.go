@@ -17,7 +17,8 @@ type Postgres struct {
 var PostgresClient *Postgres = &Postgres{}
 
 func InitPostgres() *Postgres {
-	dbUrl := fmt.Sprintf("postgres://%s:%s@localhost:%s/%s", utils.Config.Database.DB_USERNAME, utils.Config.Database.DB_PASSWORD, utils.Config.Database.DB_PORT, utils.Config.Database.DB_NAME)
+	dbUrl := fmt.Sprintf("postgres://%s:%s@localhost:%s/%s", utils.Config.Database.DbUsername,
+		utils.Config.Database.DbPassword, utils.Config.Database.DbPort, utils.Config.Database.DbName)
 	pool, err := pgxpool.New(context.Background(), dbUrl)
 	if err != nil {
 		log.Fatal("Unable to connect to database:", err)
@@ -28,9 +29,9 @@ func InitPostgres() *Postgres {
 	if err != nil {
 		log.Fatal("Unable to parse config:", err)
 	}
-	poolConfig.MaxConns = 100
+	poolConfig.MaxConns = 10000
 	PostgresClient.DB, _ = pgxpool.NewWithConfig(context.Background(), poolConfig)
-	
+
 	err = PostgresClient.DB.Ping(context.Background())
 	if err != nil {
 		log.Fatal(err)
