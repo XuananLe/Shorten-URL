@@ -3,10 +3,10 @@ SELECT shortened, original, clicks, created_at, expired_at, user_id
 FROM urls 
 WHERE shortened = $1;
 
--- name: InsertURL :exec
-INSERT INTO urls (shortened, original, clicks, created_at, expired_at, user_id) 
-VALUES ($1, $2, 0, DEFAULT, DEFAULT, $3);
-
+-- name: InsertURL :one
+INSERT INTO urls (shortened, original, clicks, created_at, expired_at, user_id)
+VALUES ($1, $2, 0, DEFAULT, DEFAULT, $3)
+RETURNING *;
 
 -- name: IncrementClicks :exec
 UPDATE urls 

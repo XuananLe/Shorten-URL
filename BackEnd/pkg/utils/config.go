@@ -2,33 +2,35 @@ package utils
 
 import (
 	"os"
+	"strings"
 	"sync"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/joho/godotenv"
+	log "github.com/sirupsen/logrus"
 )
 
 type config struct {
 	Server struct {
-		SERVER_PORT string
+		ServerPort []string
 	}
 	Database struct {
-		DB_NAME     string
-		DB_USERNAME string
-		DB_PASSWORD string
-		DB_PORT     string
+		DbName     string
+		DbUsername string
+		DbPassword string
+		DbPort     string
 	}
 	Redis struct {
-		REDIS_HOST string 
-		REDIS_PORT string 	
-		REDIS_PASS string 
-		REDIS_DB string
-		REDIS_USER string
+		RedisHost string
+		RedisPort string
+		RedisPass string
+		RedisDb   string
+		RedisUser string
+		RedisClusterNodes []string
 	}
 	Kafka struct {
-		KAFKA_BROKER_URL string
-		KAFKA_TOPIC      string
-		KAFKA_GROUP_ID   string
+		KafkaBrokerUrl string
+		KafkaTopic     string
+		KafkaGroupId   string
 	}
 }
 
@@ -38,44 +40,58 @@ var once sync.Once
 func LoadEnv() *config {
 	// Init only once
 	once.Do(func() {
-		
+
 		err := godotenv.Load("../../.env")
 		if err != nil {
 			log.Fatal("Error loading .env file")
 		}
 
+		serverPorts := strings.Split(os.Getenv("SERVER_PORT"), ",")
+		redisClusterNodes := strings.Split(os.Getenv("REDIS_CLUSTER_NODES"), ",")
+		for i := range redisClusterNodes{
+			redisClusterNodes[i] = ":" + redisClusterNodes[i]
+		}
+
 		Config = &config{
 			Server: struct {
-				SERVER_PORT string
+				ServerPort []string
 			}{
-				SERVER_PORT: os.Getenv("SERVER_PORT"),
+				ServerPort: serverPorts,
 			},
 			Database: struct {
-				DB_NAME     string
-				DB_USERNAME string
-				DB_PASSWORD string
-				DB_PORT     string
+				DbName     string
+				DbUsername string
+				DbPassword string
+				DbPort     string
 			}{
-				DB_NAME:     os.Getenv("DB_NAME"),
-				DB_USERNAME: os.Getenv("DB_USERNAME"),
-				DB_PASSWORD: os.Getenv("DB_PASSWORD"),
-				DB_PORT:     os.Getenv("DB_PORT"),
+				DbName:     os.Getenv("DB_NAME"),
+				DbUsername: os.Getenv("DB_USERNAME"),
+				DbPassword: os.Getenv("DB_PASSWORD"),
+				DbPort:     os.Getenv("DB_PORT"),
 			},
-			Redis: struct{REDIS_HOST string; REDIS_PORT string; REDIS_PASS string; REDIS_DB string; REDIS_USER string}{
-				REDIS_HOST: os.Getenv("REDIS_HOST"),
-				REDIS_PORT: os.Getenv("REDIS_PORT"),
-				REDIS_PASS: os.Getenv("REDIS_PASS"),
-				REDIS_DB: os.Getenv("REDIS_DB"),
-				REDIS_USER: os.Getenv("REDIS_USER"),
+			Redis: struct {
+				RedisHost string
+				RedisPort string
+				RedisPass string
+				RedisDb   string
+				RedisUser string
+				RedisClusterNodes []string
+			}{
+				RedisHost: os.Getenv("REDIS_HOST"),
+				RedisPort: os.Getenv("REDIS_PORT"),
+				RedisPass: os.Getenv("REDIS_PASS"),
+				RedisDb:   os.Getenv("REDIS_DB"),
+				RedisUser: os.Getenv("REDIS_USER"),
+				RedisClusterNodes: redisClusterNodes,
 			},
 			Kafka: struct {
-				KAFKA_BROKER_URL string
-				KAFKA_TOPIC      string
-				KAFKA_GROUP_ID   string
+				KafkaBrokerUrl string
+				KafkaTopic     string
+				KafkaGroupId   string
 			}{
-				KAFKA_BROKER_URL: os.Getenv("KAFKA_BROKER_URL"),
-				KAFKA_TOPIC:      os.Getenv("KAFKA_TOPIC"),
-				KAFKA_GROUP_ID:   os.Getenv("KAFKA_GROUP_ID"),
+				KafkaBrokerUrl: os.Getenv("KAFKA_BROKER_URL"),
+				KafkaTopic:     os.Getenv("KAFKA_TOPIC"),
+				KafkaGroupId:   os.Getenv("KAFKA_GROUP_ID"),
 			},
 		}
 	})

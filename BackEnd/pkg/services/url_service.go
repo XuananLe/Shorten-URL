@@ -7,6 +7,7 @@ import (
 	"shorten-url/backend/pkg/db/sqlc"
 	"shorten-url/backend/pkg/stores"
 	"shorten-url/backend/pkg/utils"
+	"sync"
 	"time"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -25,16 +26,19 @@ type CachedURL struct {
 	UserID    string    `json:"user_id,omitempty"`
 }
 
+
 type UrlService struct {
 	ctx            context.Context
 	cacheTimeout   time.Duration
-	redisClient    *redis.Client
+	redisClient    *redis.ClusterClient
 	postgresClient *stores.Postgres
+	cacheMutex sync.Mutex
+
 }
 
 var UrlServiceInstance *UrlService = &UrlService{}
 
-func NewUrlService(redisClient *redis.Client, postgresClient *stores.Postgres) *UrlService {
+func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Postgres) *UrlService {
 	UrlServiceInstance = &UrlService{
 		ctx:            context.Background(),
 		cacheTimeout:   24 * time.Hour,
@@ -48,7 +52,7 @@ func (s *UrlService) GetURL(shortenedURL string) (*CachedURL, error) {
 	cachedData, err := s.getFromCache(shortenedURL)
 	if err == nil {
 		return cachedData, nil
-	}
+	} 
 
 	url, err := s.getFromDB(shortenedURL)
 	if err != nil {
@@ -61,13 +65,30 @@ func (s *UrlService) GetURL(shortenedURL string) (*CachedURL, error) {
 
 	return url, nil
 }
+func (s *UrlService) IncrementClicks(shortenedURL string) (*CachedURL, error) {
+	var updatedURL *CachedURL
+	
+	s.cacheMutex.Lock()
+	defer s.cacheMutex.Unlock()
 
-func (s *UrlService) IncrementClicks(shortenedURL string) error {
 	cachedURL, err := s.getFromCache(shortenedURL)
 	if err == nil {
 		cachedURL.Clicks++
+		updatedURL = cachedURL
+		
 		if err := s.setCache(shortenedURL, cachedURL); err != nil {
 			log.Errorf("Failed to update clicks in cache for %s: %v", shortenedURL, err)
+		}
+	} else {
+		dbURL, err := s.getFromDB(shortenedURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get URL from database: %v", err)
+		}
+		dbURL.Clicks++ 
+		updatedURL = dbURL
+		
+		if err := s.setCache(shortenedURL, dbURL); err != nil {
+			log.Errorf("Failed to set cache for %s: %v", shortenedURL, err)
 		}
 	}
 
@@ -77,39 +98,51 @@ func (s *UrlService) IncrementClicks(shortenedURL string) error {
 		}
 	}()
 
-	return nil
+	return updatedURL, nil
 }
 
-func (s *UrlService) CreateURL(shortenedURL, originalURL string, userIDStr string) error {
+func (s *UrlService) CreateURL(originalURL string, userIDStr string) (sqlc.Url, error) {
+	baseHash := utils.Hash(originalURL)
+	shortenedURL := baseHash
+	counter := 0
+	
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		return fmt.Errorf("invalid user ID: %v", err)
+		return sqlc.Url{}, fmt.Errorf("invalid user ID: %v", err)
 	}
-
-	err = s.postgresClient.Queries.InsertURL(s.ctx, sqlc.InsertURLParams{
-		Shortened: shortenedURL,
-		Original:  originalURL,
-		UserID: pgtype.UUID{
-			Bytes: userID,
-			Valid: true,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create URL in database: %v", err)
+	for {
+		urlParams := sqlc.InsertURLParams{
+			Shortened: shortenedURL,
+			Original:  originalURL,
+			UserID: pgtype.UUID{
+				Bytes: userID,
+				Valid: true,
+			},
+		}
+		newURL, err := s.postgresClient.Queries.InsertURL(s.ctx, urlParams)
+		if err != nil {
+			if utils.IsPgUniqueViolation(err) {
+				counter++
+				shortenedURL = fmt.Sprintf("%s%d", baseHash, counter)
+				continue 
+			}
+			return sqlc.Url{}, fmt.Errorf("failed to create URL in database: %v", err)
+		}
+		cachedURL := &CachedURL{
+			Original:  originalURL,
+			Clicks:    0,
+			CreatedAt: time.Now(),
+			UserID:    userIDStr,
+		}
+		
+		if err := s.setCache(shortenedURL, cachedURL); err != nil {
+			log.Errorf("Failed to set cache for new URL %s: %v", shortenedURL, err)
+		}
+		return newURL, nil
 	}
-
-	cachedURL := &CachedURL{
-		Original:  originalURL,
-		Clicks:    0,
-		CreatedAt: time.Now(),
-		UserID:    userIDStr,
-	}
-	if err := s.setCache(shortenedURL, cachedURL); err != nil {
-		log.Errorf("Failed to set cache for new URL %s: %v", shortenedURL, err)
-	}
-
-	return nil
 }
+
+
 
 func (s *UrlService) CreateUser(userIDStr string) error {
 	userID, err := uuid.Parse(userIDStr)
@@ -177,7 +210,7 @@ func (s *UrlService) StartCacheSyncWorker(interval time.Duration) {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			s.syncCacheWithDB()
+			s.syncCacheWithDB() 
 		}
 	}()
 }
@@ -204,3 +237,5 @@ func (s *UrlService) syncCacheWithDB() {
 		}
 	}
 }
+
+

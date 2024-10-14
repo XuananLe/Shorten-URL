@@ -6,6 +6,8 @@ export async function POST({ url }) {
     try {
         const originalUrl = url.searchParams.get('url');
         const userId = url.searchParams.get('userId');
+        console.log(originalUrl)
+        console.log(userId)
         if (!originalUrl || !userId) {
             return json({
                 error: 'URL and userId are required'

@@ -11,3 +11,7 @@ export async function copyToClipboard(shortUrl: string): Promise<void> {
 	toast.success("Copied to clipboard!");
 }
 
+export function convertToLocalTime(backendTime: string) {
+	let localDate = new Date(backendTime);
+	return localDate.toLocaleString()
+}

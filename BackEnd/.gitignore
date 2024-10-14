@@ -4,6 +4,7 @@
 # Binaries for programs and plugins
 *.exe
 *.exe~
+.idea
 *.dll
 *.so
 *.dylib
@@ -23,3 +24,8 @@ go.work.sum
 
 # env file
 .env
+
+redis/*/*.rdb
+redis/*/appendonlydir/*
+redis/*/nodes.conf
+
