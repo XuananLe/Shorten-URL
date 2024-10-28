@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server-Sent Events in Go</title>
+</head>
+<body>
+    <h1>Server-Sent Events</h1>
+    <div id="sse-messages"></div>
+
+    <script>
+        const eventSource = new EventSource("http://localhost:3002/events");
+
+        eventSource.onmessage = function(event) {
+            const messageDiv = document.getElementById("sse-messages");
+            const newMessage = document.createElement("p");
+            newMessage.textContent = event.data;
+            messageDiv.appendChild(newMessage);
+        };
+
+        eventSource.onerror = function() {
+            console.error("EventSource failed. Connection was closed.");
+            eventSource.close();
+        };
+    </script>
+</body>
+</html>

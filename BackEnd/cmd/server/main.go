@@ -3,28 +3,45 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
-	log "github.com/sirupsen/logrus"
+	"fmt"
 	"net/http"
 	_ "net/http/pprof"
+	"shorten-url/backend/pkg/config"
 	"shorten-url/backend/pkg/services"
 	"shorten-url/backend/pkg/stores"
 	"shorten-url/backend/pkg/utils"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+	"github.com/robfig/cron/v3"
+	log "github.com/sirupsen/logrus"
 )
 
 func main() {
 	analyticsService := flag.Bool("analyticsService", false, "Track the number of link clicks")
 	logging := flag.Bool("logging", false, "Enable Logging All Request")
 	flag.Parse()
-	utils.LoadEnv()
+
+	_ = make([]byte, 1<<30)
+	c := cron.New()
+
+	c.AddFunc("@hourly", func() {
+		err := services.UrlServiceInstance.DeleteExpiredURLs()
+		if err != nil {
+			log.Error(err)
+		}
+	})
+	c.Start()
+
+	config.LoadEnv()
 	stores.InitRedis("41943040", "volatile-lru")
 	stores.InitPostgres()
 	defer stores.PostgresClient.DB.Close()
-	
+
 	services.NewUrlService(stores.RedisCluster, stores.PostgresClient)
 	r := chi.NewRouter()
 
@@ -49,10 +66,25 @@ func main() {
 		}),
 	)
 
-
 	r.Use(middleware.StripSlashes)
 	r.Use(middleware.Recoverer)
 
+	r.Get("/events", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
+			return
+		}
+		for {
+			message := fmt.Sprintf("Current time: %s", time.Now().Format(time.RFC1123))
+			fmt.Fprintf(w, "data: %s\n\n", message)
+			flusher.Flush()
+		}
+	})
 
 	r.Get("/short/{id}", func(w http.ResponseWriter, r *http.Request) {
 		shortenedURL := chi.URLParam(r, "id")
@@ -138,7 +170,7 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	portArray := utils.Config.Server.ServerPort
+	portArray := config.AppConfig.Server.Ports
 	for _, port := range portArray {
 		wg.Add(1)
 		go func(port string) {
@@ -149,4 +181,5 @@ func main() {
 
 	wg.Wait()
 
+	select {}
 }

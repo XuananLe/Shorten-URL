@@ -25,5 +25,6 @@ require (
 require (
 	github.com/go-chi/cors v1.2.1
 	github.com/redis/go-redis/v9 v9.6.1
+	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/sys v0.25.0 // indirect
 )
