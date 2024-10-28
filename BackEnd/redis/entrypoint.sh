@@ -1,7 +1,7 @@
 #!/bin/bash
 
 set -o allexport
-source ../.env
+source .env
 set -o allexport
 
 IFS=',' read -r -a ports <<< "$REDIS_CLUSTER_NODES"
@@ -22,6 +22,7 @@ appendonly yes
 EOL
     redis-server ./redis.conf --daemonize yes
     echo "Running Redis at $i"
+    ufw allow $i
     cd ..
 done
 

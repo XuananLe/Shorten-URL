@@ -1,0 +1,2 @@
+GET http://localhost:3001/short/XPwhgzM7
+Content-Type: application/x-www-form-urlencoded

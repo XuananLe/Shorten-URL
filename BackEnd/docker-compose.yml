@@ -1,9 +1,47 @@
 services:
-  server:
-    container_name: backend-golang
+  golang:
+    build: .
+    volumes:
+      - .:/usr/src/app
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+    expose:
+      - "3002"
+      - "3003"
+      - "3004"
+      - "3005"
+      - "3006"
+      - "3007"
+      - "3008"
+      - "3009"
+      - "3010"
+      - "3011"
+      - "3012" 
+    command: ["go", "run", "main.go"]
     depends_on:
-      - psql
-      - redis
+      psql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  nginx:
+    image: nginx:latest
+    volumes:
+      - ./deployment/nginx.conf:/etc/nginx/nginx.conf
+    ports:
+      - ${NGINX_PORT}:3001
+    healthcheck:
+      test: ["CMD-SHELL", "service", "nginx", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - golang
   psql:
     image: postgres:latest
     environment:
@@ -14,9 +52,15 @@ services:
       - "${DB_PORT}:5432"
     volumes:
       - psql_volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
-    image: redis:latest
+    build: 
+      context: ./redis/
     environment:
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: ${REDIS_PORT}
@@ -26,5 +70,11 @@ services:
       REDIS_CLUSTER_NODES: ${REDIS_CLUSTER_NODES}
     ports:
       - "${REDIS_PORT}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   psql_volume:

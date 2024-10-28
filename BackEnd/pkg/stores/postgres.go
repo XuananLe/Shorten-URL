@@ -3,10 +3,11 @@ package stores
 import (
 	"context"
 	"fmt"
+	"shorten-url/backend/pkg/config"
+	"shorten-url/backend/pkg/db/sqlc"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	log "github.com/sirupsen/logrus"
-	"shorten-url/backend/pkg/db/sqlc"
-	"shorten-url/backend/pkg/utils"
 )
 
 type Postgres struct {
@@ -17,8 +18,12 @@ type Postgres struct {
 var PostgresClient *Postgres = &Postgres{}
 
 func InitPostgres() *Postgres {
-	dbUrl := fmt.Sprintf("postgres://%s:%s@localhost:%s/%s", utils.Config.Database.DbUsername,
-		utils.Config.Database.DbPassword, utils.Config.Database.DbPort, utils.Config.Database.DbName)
+	dbUrl := fmt.Sprintf("postgres://%s:%s@%s:%s/%s", 
+	config.AppConfig.Database.Username,
+		config.AppConfig.Database.Password,
+		config.AppConfig.Database.Host,
+		config.AppConfig.Database.Port, 
+		config.AppConfig.Database.Name)
 	pool, err := pgxpool.New(context.Background(), dbUrl)
 	if err != nil {
 		log.Fatal("Unable to connect to database:", err)

@@ -67,3 +67,5 @@ WHERE shortened = $1;
 SELECT shortened, original, clicks, created_at, expired_at
 FROM urls 
 WHERE original LIKE '%' || $1 || '%';
+
+-- 
