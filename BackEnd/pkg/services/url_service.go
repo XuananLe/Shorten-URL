@@ -26,7 +26,6 @@ type CachedURL struct {
 	UserID    string    `json:"user_id,omitempty"`
 }
 
-
 type UrlService struct {
 	ctx            context.Context
 	cacheTimeout   time.Duration
@@ -157,6 +156,26 @@ func (s *UrlService) CreateUser(userIDStr string) error {
 
 	return nil
 }
+
+func (s *UrlService) DeleteExpiredURLs() error {
+	expiredUrls, err := s.postgresClient.Queries.GetExpiredURLs(s.ctx)
+	if err != nil {
+		log.Errorf("Failed to get expired URLs: %v", err)
+	} else {
+		for _, url := range expiredUrls {
+			err := s.redisClient.Del(s.ctx, url.Shortened).Err()
+			if err != nil {
+				log.Errorf("Failed to delete expired URL from cache: %v", err)
+			}
+		}
+	}
+	err = s.postgresClient.Queries.DeleteExpiredURLs(s.ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete expired URLs: %v", err)
+	}
+	return nil
+}
+
 
 func (s *UrlService) getFromCache(shortenedURL string) (*CachedURL, error) {
 	data, err := s.redisClient.Get(s.ctx, shortenedURL).Result()

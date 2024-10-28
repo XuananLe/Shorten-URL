@@ -3,9 +3,8 @@ package stores
 import (
 	"context"
 	"fmt"
-	"shorten-url/backend/pkg/utils"
+	"shorten-url/backend/pkg/config"
 	"time"
-
 	"github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 )
@@ -13,17 +12,17 @@ import (
 var RedisCluster *redis.ClusterClient
 
 func InitRedis(maxMemory string, evictionStrategy string) *redis.ClusterClient {
-	redisConfig := utils.LoadEnv().Redis.RedisClusterNodes
+	redisConfig := config.AppConfig.Redis.ClusterNodes
 
 	RedisCluster = redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs:         redisConfig,
+		Addrs:          redisConfig,
 		RouteByLatency: true,
 		ReadOnly:       true,
-		PoolSize:       10,
-		MinIdleConns:   5,
-		DialTimeout:    5 * time.Second,
-		ReadTimeout:    3 * time.Second,
-		WriteTimeout:   3 * time.Second,
+		PoolSize:       20,               
+		MinIdleConns:   3,                 
+		DialTimeout:    3 * time.Second,   
+		ReadTimeout:    2 * time.Second,
+		WriteTimeout:   2 * time.Second,
 	})
 
 	ctx := context.Background()
@@ -33,19 +32,23 @@ func InitRedis(maxMemory string, evictionStrategy string) *redis.ClusterClient {
 		log.Fatalf("Failed to connect to Redis Cluster: %v", err)
 	}
 
-	err = setClusterConfig(ctx, RedisCluster, "maxmemory", maxMemory)
-	if err != nil {
-		log.Fatalf("Failed to set Redis Cluster maxmemory: %v", err)
-	}
+	// Setting cluster configuration asynchronously
+	go func() {
+		err = setClusterConfig(ctx, RedisCluster, "maxmemory", maxMemory)
+		if err != nil {
+			log.Fatalf("Failed to set Redis Cluster maxmemory: %v", err)
+		}
 
-	err = setClusterConfig(ctx, RedisCluster, "maxmemory-policy", evictionStrategy)
-	if err != nil {
-		log.Fatalf("Failed to set Redis Cluster maxmemory-policy: %v", err)
-	}
+		err = setClusterConfig(ctx, RedisCluster, "maxmemory-policy", evictionStrategy)
+		if err != nil {
+			log.Fatalf("Failed to set Redis Cluster maxmemory-policy: %v", err)
+		}
+	}()
 
 	fmt.Println("Redis Cluster Connected")
 	return RedisCluster
 }
+
 
 func setClusterConfig(ctx context.Context, client *redis.ClusterClient, key, value string) error {
 	var firstErr error
