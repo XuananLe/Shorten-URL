@@ -16,12 +16,13 @@
     import { convertToLocalTime, copyToClipboard } from "$lib/utils";
     import { FRONTEND_URL, type UrlEntry } from "$lib";
     import ky from "ky";
-    
+
     let url = "";
     let isLoading = false;
     let urlHistory: UrlEntry[] = [];
 
-    onMount(() => {
+    onMount(async () => {
+        console.log("On mount the first time");
         const savedHistory = localStorage.getItem("urlHistory");
         if (savedHistory) {
             urlHistory = JSON.parse(savedHistory);
@@ -32,14 +33,13 @@
         if (!existingUserId) {
             const newUserId = crypto.randomUUID();
             localStorage.setItem("userId", newUserId);
-
-            ky.post('/api/users', {
-                json: {
-                    userId: newUserId,
-                },
-            }).catch((error) => {
-                console.error("Failed to register new user:", error);
+            console.log(`Registering new user ${newUserId}`);
+            const response = await ky.post("/api/users", {
+                json: { userId: newUserId },
+            }).catch((e) => {
+                console.error("Error registering user", e);
             });
+            console.log(response);
         }
     });
     function saveHistory() {
@@ -60,8 +60,14 @@
         isLoading = true;
 
         try {
-            console.log(`Creating URL ${url} ${localStorage.getItem("userId")}`)
-            const data : any = await ky.post(`/api/url?url=${url}&userId=${localStorage.getItem("userId")}`).json();
+            console.log(
+                `Creating URL ${url} ${localStorage.getItem("userId")}`,
+            );
+            const data: any = await ky
+                .post(
+                    `/api/url?url=${url}&userId=${localStorage.getItem("userId")}`,
+                )
+                .json();
 
             console.log(data);
 

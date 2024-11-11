@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
 	"net/http"
 	_ "net/http/pprof"
 	"shorten-url/backend/pkg/config"
@@ -13,29 +12,34 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	"github.com/robfig/cron/v3"
+	"github.com/go-chi/httprate"
+	_ "github.com/robfig/cron/v3"
 	log "github.com/sirupsen/logrus"
 )
 
 func main() {
 	analyticsService := flag.Bool("analyticsService", false, "Track the number of link clicks")
 	logging := flag.Bool("logging", false, "Enable Logging All Request")
+	rateLimiting := flag.Bool("ratelimit", false, "Enable Rate Limiting")
 	flag.Parse()
+	services.NewUrlService(stores.RedisCluster, stores.PostgresClient)
 
+	// Bypass Garbage Collection
 	_ = make([]byte, 1<<30)
-	c := cron.New()
+	// c := cron.New()
 
-	c.AddFunc("@hourly", func() {
-		err := services.UrlServiceInstance.DeleteExpiredURLs()
-		if err != nil {
-			log.Error(err)
-		}
-	})
-	c.Start()
+
+
+	// c.AddFunc("@hourly", func() {
+	// 	err := services.UrlServiceInstance.DeleteExpiredURLs()
+	// 	if err != nil {
+	// 		log.Error(err)
+	// 	}
+	// })
+	// c.Start()
 
 	config.LoadEnv()
 	stores.InitRedis("41943040", "volatile-lru")
@@ -45,12 +49,10 @@ func main() {
 	services.NewUrlService(stores.RedisCluster, stores.PostgresClient)
 	r := chi.NewRouter()
 
-	// Global Middleware
 	if *logging {
 		r.Use(middleware.Logger)
 	}
 
-	// TODO: Specific Origin from FE. Eg. Only Allow https://apm.shorten.com/....
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"https://*", "http://*", "ws://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -69,29 +71,14 @@ func main() {
 	r.Use(middleware.StripSlashes)
 	r.Use(middleware.Recoverer)
 
-	r.Get("/events", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
-			return
-		}
-		for {
-			message := fmt.Sprintf("Current time: %s", time.Now().Format(time.RFC1123))
-			fmt.Fprintf(w, "data: %s\n\n", message)
-			flusher.Flush()
-		}
-	})
-
 	r.Get("/short/{id}", func(w http.ResponseWriter, r *http.Request) {
 		shortenedURL := chi.URLParam(r, "id")
 		if shortenedURL == "" {
 			http.Error(w, "Missing ID", http.StatusBadRequest)
 			return
 		}
+		// nem cai message vao trong rabbit queue
+		
 
 		originalURL, err := services.UrlServiceInstance.GetURL(shortenedURL)
 		if err != nil || originalURL == nil {
@@ -114,8 +101,14 @@ func main() {
 	})
 
 	r.Group(func(r chi.Router) {
-		// TODO: Allow user to create at max 100 request per minute
-
+		if *rateLimiting {
+			r.Use(httprate.Limit(
+				1000,             
+				10 * time.Second, 
+				httprate.WithKeyFuncs(httprate.KeyByIP, httprate.KeyByEndpoint),
+			))	
+		}
+		
 		r.Post("/create", func(w http.ResponseWriter, r *http.Request) {
 			url := r.URL.Query().Get("url")
 			userId := r.URL.Query().Get("userId")
@@ -142,6 +135,41 @@ func main() {
 			})
 		})
 	})
+
+
+	r.Get("/history/{userId}", func(w http.ResponseWriter, r *http.Request) {
+		userId := chi.URLParam(r, "userId")
+		if userId == "" {
+			http.Error(w, "Missing UserId parameter", http.StatusBadRequest)
+			return
+		}
+
+		urls := services.UrlServiceInstance.GetURLs(userId)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(urls)
+	})
+
+
+
+
+	r.Delete("/short/{id}", func(w http.ResponseWriter, r *http.Request) {
+		shortenedURL := chi.URLParam(r, "id")
+		if shortenedURL == "" {
+			http.Error(w, "Missing ID", http.StatusBadRequest)
+			return
+		}
+
+		err := services.UrlServiceInstance.DeleteURL(shortenedURL)
+		if err != nil {
+			http.Error(w, "Failed to delete URL", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("URL deleted successfully"))
+	})
+
 
 	r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
 		var user services.User

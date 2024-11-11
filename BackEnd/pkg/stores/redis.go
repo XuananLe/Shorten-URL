@@ -32,7 +32,6 @@ func InitRedis(maxMemory string, evictionStrategy string) *redis.ClusterClient {
 		log.Fatalf("Failed to connect to Redis Cluster: %v", err)
 	}
 
-	// Setting cluster configuration asynchronously
 	go func() {
 		err = setClusterConfig(ctx, RedisCluster, "maxmemory", maxMemory)
 		if err != nil {
