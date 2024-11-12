@@ -9,10 +9,17 @@ import (
 	"shorten-url/backend/pkg/utils"
 	"sync"
 	"time"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
+)
+
+const (
+	batchSize = 100
+	maxRetries = 3 
+	baseDelay= 100 * time.Millisecond 
 )
 
 type User struct {
@@ -31,11 +38,13 @@ type UrlService struct {
 	cacheTimeout   time.Duration
 	redisClient    *redis.ClusterClient
 	postgresClient *stores.Postgres
-	cacheMutex sync.Mutex
-
+	cacheMutex sync.RWMutex
+	errorChan chan error
+	instanceId string
 }
 
-var UrlServiceInstance *UrlService = &UrlService{}
+var UrlServiceInstance *UrlService;
+
 
 func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Postgres) *UrlService {
 	UrlServiceInstance = &UrlService{
@@ -43,26 +52,47 @@ func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Post
 		cacheTimeout:   24 * time.Hour,
 		redisClient:    redisClient,
 		postgresClient: postgresClient,
+		cacheMutex: sync.RWMutex{},
+		errorChan: make(chan error, 100),
+		instanceId: uuid.New().String()[0:8],
 	}
+	
+	go UrlServiceInstance.handleErrors()
+
 	return UrlServiceInstance
 }
 
 func (s *UrlService) GetURL(shortenedURL string) (*CachedURL, error) {
-	cachedData, err := s.getFromCache(shortenedURL)
-	if err == nil {
-		return cachedData, nil
-	} 
 
-	url, err := s.getFromDB(shortenedURL)
-	if err != nil {
-		return nil, err
-	}
+    var cachedData *CachedURL
+    var err error
 
-	if err := s.setCache(shortenedURL, url); err != nil {
-		log.Errorf("Failed to set cache for %s: %v", shortenedURL, err)
-	}
+    for i := 0; i < maxRetries; i++ {
+        s.cacheMutex.RLock()
+        cachedData, err = s.getFromCache(shortenedURL)
+        s.cacheMutex.RUnlock()
 
-	return url, nil
+        if err == nil {
+            return cachedData, nil
+        }
+        log.Warnf("Cache miss or error on attempt %d: %v", i+1, err)
+        
+        time.Sleep(baseDelay * (1 << i))
+    }
+
+    log.Warn("Falling back to database due to repeated cache read failure.")
+    url, err := s.getFromDB(shortenedURL)
+    if err != nil {
+        return nil, err
+    }
+
+    go func() {
+        if cacheErr := s.setCache(shortenedURL, url); cacheErr != nil {
+            s.errorChan <- fmt.Errorf("cache update failed for %s: %w", shortenedURL, cacheErr)
+        }
+    }()
+
+    return url, nil
 }
 func (s *UrlService) IncrementClicks(shortenedURL string) (*CachedURL, error) {
 	var updatedURL *CachedURL
@@ -94,11 +124,28 @@ func (s *UrlService) IncrementClicks(shortenedURL string) (*CachedURL, error) {
 	go func() {
 		if err := s.postgresClient.Queries.IncrementClicks(s.ctx, shortenedURL); err != nil {
 			log.Errorf("Failed to increment clicks in database for %s: %v", shortenedURL, err)
+			s.errorChan <- fmt.Errorf("DB click increment failed for %s: %w", shortenedURL, err)
 		}
 	}()
 
 	return updatedURL, nil
 }
+
+
+func (s *UrlService) DeleteURL(shortenedURL string) error {
+    go func() {
+        if err := s.postgresClient.Queries.DeleteURL(s.ctx, shortenedURL); err != nil {
+            log.Errorf("failed to delete URL from database: %v", err)
+        }
+    }()
+
+	if err := s.redisClient.Del(s.ctx, shortenedURL).Err(); err != nil {
+        return fmt.Errorf("failed to delete URL from cache: %v", err)
+    }
+
+    return nil
+}
+
 
 func (s *UrlService) CreateURL(originalURL string, userIDStr string) (sqlc.Url, error) {
 	baseHash := utils.Hash(originalURL)
@@ -127,20 +174,22 @@ func (s *UrlService) CreateURL(originalURL string, userIDStr string) (sqlc.Url, 
 			}
 			return sqlc.Url{}, fmt.Errorf("failed to create URL in database: %v", err)
 		}
-		cachedURL := &CachedURL{
-			Original:  originalURL,
-			Clicks:    0,
-			CreatedAt: time.Now(),
-			UserID:    userIDStr,
-		}
 		
-		if err := s.setCache(shortenedURL, cachedURL); err != nil {
-			log.Errorf("Failed to set cache for new URL %s: %v", shortenedURL, err)
-		}
+		go func() {
+			cachedURL := &CachedURL{
+				Original:  originalURL,
+				Clicks:    0,
+				CreatedAt: time.Now(),
+				UserID:    userIDStr,
+			}
+			if err := s.setCache(urlParams.Shortened, cachedURL); err != nil {
+				s.errorChan <- fmt.Errorf("cache set failed for new URL %s: %w", urlParams.Shortened, err)
+			}
+		}()
+	
 		return newURL, nil
 	}
 }
-
 
 
 func (s *UrlService) CreateUser(userIDStr string) error {
@@ -157,24 +206,67 @@ func (s *UrlService) CreateUser(userIDStr string) error {
 	return nil
 }
 
+
+func (s *UrlService) GetURLs(userId string) []CachedURL{
+	userID, err := uuid.Parse(userId)
+	if err != nil {
+		log.Errorf("Failed to parse user ID: %v", err)
+		return []CachedURL{}
+	}
+
+	urls, err := s.postgresClient.Queries.GetURLsByUser(s.ctx, utils.ConvertFromUuidPg(userID))
+	if err != nil {
+		log.Errorf("Failed to get URLs by user: %v", err)
+		return []CachedURL{}
+	}
+
+	var response []CachedURL
+	for _, url := range urls {
+		response = append(response, CachedURL{
+			Original:  url.Original,
+			Clicks:    int(url.Clicks.Int64),
+			CreatedAt: url.CreatedAt.Time,
+			ExpiredAt: url.ExpiredAt.Time,
+		})
+	}
+
+	return response
+}
+
 func (s *UrlService) DeleteExpiredURLs() error {
 	expiredUrls, err := s.postgresClient.Queries.GetExpiredURLs(s.ctx)
 	if err != nil {
-		log.Errorf("Failed to get expired URLs: %v", err)
-	} else {
-		for _, url := range expiredUrls {
-			err := s.redisClient.Del(s.ctx, url.Shortened).Err()
-			if err != nil {
-				log.Errorf("Failed to delete expired URL from cache: %v", err)
-			}
+		return fmt.Errorf("failed to get expired URLs: %w", err)
+	}
+
+	for i := 0; i < len(expiredUrls); i += batchSize {
+		end := i + batchSize
+		if end > len(expiredUrls) {
+			end = len(expiredUrls)
 		}
+		batch := expiredUrls[i:end]
+
+		var wg sync.WaitGroup
+		for _, url := range batch {
+			wg.Add(1)
+			go func(shortened string) {
+				defer wg.Done()
+				if err := s.redisClient.Del(s.ctx, shortened).Err(); err != nil {
+					s.errorChan <- fmt.Errorf("failed to delete from cache: %s: %w", shortened, err)
+				}
+			}(url.Shortened)
+		}
+		wg.Wait()
 	}
-	err = s.postgresClient.Queries.DeleteExpiredURLs(s.ctx)
-	if err != nil {
-		return fmt.Errorf("failed to delete expired URLs: %v", err)
+
+	// Delete from DB
+	if err := s.postgresClient.Queries.DeleteExpiredURLs(s.ctx); err != nil {
+		return fmt.Errorf("failed to delete expired URLs from DB: %w", err)
 	}
+
 	return nil
 }
+
 
 
 func (s *UrlService) getFromCache(shortenedURL string) (*CachedURL, error) {
@@ -257,4 +349,8 @@ func (s *UrlService) syncCacheWithDB() {
 	}
 }
 
-
+func (s *UrlService) handleErrors() {
+	for err := range s.errorChan {
+		log.Errorf("Async operation error: %v", err)
+	}
+}
