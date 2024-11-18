@@ -24,6 +24,7 @@ func InitPostgres() *Postgres {
 		config.AppConfig.Database.Host,
 		config.AppConfig.Database.Port, 
 		config.AppConfig.Database.Name)
+
 	pool, err := pgxpool.New(context.Background(), dbUrl)
 	if err != nil {
 		log.Fatal("Unable to connect to database:", err)
@@ -34,7 +35,7 @@ func InitPostgres() *Postgres {
 	if err != nil {
 		log.Fatal("Unable to parse config:", err)
 	}
-	poolConfig.MaxConns = 10000
+	poolConfig.MaxConns = 1000
 	PostgresClient.DB, _ = pgxpool.NewWithConfig(context.Background(), poolConfig)
 
 	err = PostgresClient.DB.Ping(context.Background())
