@@ -68,4 +68,12 @@ SELECT shortened, original, clicks, created_at, expired_at
 FROM urls 
 WHERE original LIKE '%' || $1 || '%';
 
--- 
+-- name: BatchInsertURLs :exec
+INSERT INTO urls (shortened, original, clicks, created_at, expired_at, user_id)
+SELECT unnest($1::text[]), 
+       unnest($2::text[]), 
+       unnest($3::bigint[]), 
+       unnest($4::timestamptz[]), 
+       unnest($5::timestamptz[]), 
+       unnest($6::uuid[])
+ON CONFLICT (shortened, user_id) DO NOTHING;

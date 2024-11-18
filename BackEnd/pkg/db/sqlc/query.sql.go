@@ -11,6 +11,38 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const batchInsertURLs = `-- name: BatchInsertURLs :exec
+INSERT INTO urls (shortened, original, clicks, created_at, expired_at, user_id)
+SELECT unnest($1::text[]), 
+       unnest($2::text[]), 
+       unnest($3::bigint[]), 
+       unnest($4::timestamptz[]), 
+       unnest($5::timestamptz[]), 
+       unnest($6::uuid[])
+ON CONFLICT (shortened, user_id) DO NOTHING
+`
+
+type BatchInsertURLsParams struct {
+	Column1 []string
+	Column2 []string
+	Column3 []int64
+	Column4 []pgtype.Timestamptz
+	Column5 []pgtype.Timestamptz
+	Column6 []pgtype.UUID
+}
+
+func (q *Queries) BatchInsertURLs(ctx context.Context, arg BatchInsertURLsParams) error {
+	_, err := q.db.Exec(ctx, batchInsertURLs,
+		arg.Column1,
+		arg.Column2,
+		arg.Column3,
+		arg.Column4,
+		arg.Column5,
+		arg.Column6,
+	)
+	return err
+}
+
 const deleteExpiredURLs = `-- name: DeleteExpiredURLs :exec
 DELETE FROM urls 
 WHERE expired_at < CURRENT_TIMESTAMP
