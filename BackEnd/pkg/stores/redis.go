@@ -18,11 +18,13 @@ func InitRedis(maxMemory string, evictionStrategy string) *redis.ClusterClient {
 		Addrs:          redisConfig,
 		RouteByLatency: true,
 		ReadOnly:       true,
-		PoolSize:       20,               
-		MinIdleConns:   3,                 
+		MaxRedirects: 	3,
+		PoolSize:       200,               
+		MinIdleConns:   10,                 
 		DialTimeout:    3 * time.Second,   
 		ReadTimeout:    2 * time.Second,
 		WriteTimeout:   2 * time.Second,
+		RouteRandomly: true,
 	})
 
 	ctx := context.Background()

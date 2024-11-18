@@ -45,7 +45,8 @@ type KafkaConfig struct {
 var AppConfig Config
 
 func LoadEnv() *Config {
-	err := godotenv.Load("../../.env")
+	os.Clearenv()
+	err := godotenv.Load("../../.env")	
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}

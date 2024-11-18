@@ -3,54 +3,115 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"net/http"
-	_ "net/http/pprof"
+	"os"
 	"shorten-url/backend/pkg/config"
 	"shorten-url/backend/pkg/services"
 	"shorten-url/backend/pkg/stores"
 	"shorten-url/backend/pkg/utils"
-	"strings"
-	"sync"
 	"time"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/go-chi/httprate"
+	"github.com/robfig/cron"
 	_ "github.com/robfig/cron/v3"
 	log "github.com/sirupsen/logrus"
+	chitrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/go-chi/chi.v5"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
+type FeatureFlags struct {
+	AnalyticsService bool `json:"analyticsService"`
+	Logging          bool `json:"logging"`
+	Monitoring       bool `json:"monitoring"`
+	RateLimiting     bool `json:"rateLimiting"`
+}
+
+func loadFeatureFlags(configFile string) (FeatureFlags, error) {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return FeatureFlags{}, err
+	}
+	var flags FeatureFlags
+	err = json.Unmarshal(data, &flags)
+	return flags, err
+}
+
 func main() {
-	analyticsService := flag.Bool("analyticsService", false, "Track the number of link clicks")
-	logging := flag.Bool("logging", false, "Enable Logging All Request")
-	rateLimiting := flag.Bool("ratelimit", false, "Enable Rate Limiting")
+	flags, err := loadFeatureFlags("feature.json")
+	if err != nil {
+		log.Fatalf("Failed to load feature flags: %v", err)
+	}
+
+	if flags.AnalyticsService {
+		fmt.Println("Analytics Service is enabled.")
+	} else {
+		fmt.Println("Analytics Service is disabled.")
+	}
+	if flags.Logging {
+		fmt.Println("Logging is enabled.")
+	} else {
+		fmt.Println("Logging is disabled.")
+	}
+
+	if flags.Monitoring {
+		fmt.Println("Monitoring is enabled.")
+		tracer.Start()
+		defer tracer.Stop()
+	} else {
+		fmt.Println("Monitoring is disabled.")
+	}
+	if flags.RateLimiting {
+		fmt.Println("Rate Limiting is enabled.")
+	} else {
+		fmt.Println("Rate Limiting is disabled.")
+	}
+
+	port := flag.String("port", "3002", "Port to run the server on")
+
 	flag.Parse()
-	services.NewUrlService(stores.RedisCluster, stores.PostgresClient)
 
-	// Bypass Garbage Collection
 	_ = make([]byte, 1<<30)
-	// c := cron.New()
+	c := cron.New()
 
-
-
-	// c.AddFunc("@hourly", func() {
-	// 	err := services.UrlServiceInstance.DeleteExpiredURLs()
-	// 	if err != nil {
-	// 		log.Error(err)
-	// 	}
-	// })
-	// c.Start()
+	c.AddFunc("@hourly", func() {
+		err := services.UrlServiceInstance.DeleteExpiredURLs()
+		if err != nil {
+			log.Error(err)
+		}
+	})
+	c.Start()
+	defer c.Stop()
 
 	config.LoadEnv()
 	stores.InitRedis("41943040", "volatile-lru")
 	stores.InitPostgres()
-	defer stores.PostgresClient.DB.Close()
+	stores.InitRabbitMQ()
+	stores.RabbitMQClient.DeclareQueue("queue-based-load-leveling-" + *port)
+	services.NewUrlService(stores.RedisCluster, stores.PostgresClient, stores.RabbitMQClient)
 
-	services.NewUrlService(stores.RedisCluster, stores.PostgresClient)
+
+	defer stores.PostgresClient.DB.Close()
+	defer stores.RedisCluster.Close()
+	defer stores.CloseRabbitMQ()
+
+	numConsumers := 10
+	for i := 1; i <= numConsumers; i++ {
+		go services.UrlServiceInstance.ProcessQueueBatch(*port,fmt.Sprintf("consumer-%d", i), 100, 5*time.Second)
+	}
+
 	r := chi.NewRouter()
 
-	if *logging {
+	if flags.Logging {
 		r.Use(middleware.Logger)
+	}
+	r.Use(middleware.Recoverer)
+
+	if flags.Monitoring {
+		r.Use(chitrace.Middleware(chitrace.WithServiceName("chi-server")))
 	}
 
 	r.Use(cors.Handler(cors.Options{
@@ -61,15 +122,7 @@ func main() {
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
-
-	r.Use(
-		middleware.Maybe(middleware.StripSlashes, func(r *http.Request) bool {
-			return !strings.HasPrefix(r.URL.Path, "/debug/")
-		}),
-	)
-
 	r.Use(middleware.StripSlashes)
-	r.Use(middleware.Recoverer)
 
 	r.Get("/short/{id}", func(w http.ResponseWriter, r *http.Request) {
 		shortenedURL := chi.URLParam(r, "id")
@@ -77,8 +130,6 @@ func main() {
 			http.Error(w, "Missing ID", http.StatusBadRequest)
 			return
 		}
-		// nem cai message vao trong rabbit queue
-		
 
 		originalURL, err := services.UrlServiceInstance.GetURL(shortenedURL)
 		if err != nil || originalURL == nil {
@@ -86,7 +137,7 @@ func main() {
 			return
 		}
 
-		if *analyticsService {
+		if flags.AnalyticsService {
 			updatedURL, err := services.UrlServiceInstance.IncrementClicks(shortenedURL)
 			if err != nil {
 				log.Error(err)
@@ -101,14 +152,14 @@ func main() {
 	})
 
 	r.Group(func(r chi.Router) {
-		if *rateLimiting {
+		if flags.RateLimiting {
 			r.Use(httprate.Limit(
-				1000,             
-				10 * time.Second, 
+				1000,
+				10*time.Second,
 				httprate.WithKeyFuncs(httprate.KeyByIP, httprate.KeyByEndpoint),
-			))	
+			))
 		}
-		
+
 		r.Post("/create", func(w http.ResponseWriter, r *http.Request) {
 			url := r.URL.Query().Get("url")
 			userId := r.URL.Query().Get("userId")
@@ -120,22 +171,20 @@ func main() {
 				http.Error(w, "Missing UserId parameter", http.StatusBadRequest)
 				return
 			}
-
-			newUrl, err := services.UrlServiceInstance.CreateURL(url, userId)
+			newUrl, err := services.UrlServiceInstance.CreateURL(*port, url, userId)
 			if err != nil {
 				log.Errorf("Failed to create URL: %v", err)
 				http.Error(w, "Failed to create URL", http.StatusInternalServerError)
+				log.Fatal(err)
 				return
 			}
 			w.WriteHeader(http.StatusCreated)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
-				"shortUrl":  newUrl.Shortened,
-				"createdAt": newUrl.CreatedAt,
+				"shortUrl": newUrl,
 			})
 		})
 	})
-
 
 	r.Get("/history/{userId}", func(w http.ResponseWriter, r *http.Request) {
 		userId := chi.URLParam(r, "userId")
@@ -149,9 +198,6 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(urls)
 	})
-
-
-
 
 	r.Delete("/short/{id}", func(w http.ResponseWriter, r *http.Request) {
 		shortenedURL := chi.URLParam(r, "id")
@@ -169,7 +215,6 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("URL deleted successfully"))
 	})
-
 
 	r.Post("/users", func(w http.ResponseWriter, r *http.Request) {
 		var user services.User
@@ -196,18 +241,7 @@ func main() {
 		w.Write([]byte("Method is not valid"))
 	})
 
-	var wg sync.WaitGroup
-
-	portArray := config.AppConfig.Server.Ports
-	for _, port := range portArray {
-		wg.Add(1)
-		go func(port string) {
-			defer wg.Done()
-			utils.StartServer(port, r)
-		}(port)
-	}
-
-	wg.Wait()
+	utils.StartServer(*port, r)
 
 	select {}
 }

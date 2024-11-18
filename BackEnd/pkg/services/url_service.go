@@ -4,27 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/redis/go-redis/v9"
+	log "github.com/sirupsen/logrus"
 	"shorten-url/backend/pkg/db/sqlc"
 	"shorten-url/backend/pkg/stores"
 	"shorten-url/backend/pkg/utils"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/redis/go-redis/v9"
-	log "github.com/sirupsen/logrus"
 )
 
 const (
-	batchSize = 100
-	maxRetries = 3 
-	baseDelay= 100 * time.Millisecond 
+	batchSize  = 100
+	maxRetries = 3
+	baseDelay  = 100 * time.Millisecond
 )
 
-type User struct {
-	UserID string `json:"userId"`
-}
 type CachedURL struct {
 	Original  string    `json:"original"`
 	Clicks    int       `json:"clicks"`
@@ -38,25 +35,32 @@ type UrlService struct {
 	cacheTimeout   time.Duration
 	redisClient    *redis.ClusterClient
 	postgresClient *stores.Postgres
-	cacheMutex sync.RWMutex
-	errorChan chan error
-	instanceId string
+	RabbitMQClient *stores.RabbitMQ
+	cacheMutex     sync.RWMutex
+	errorChan      chan error
+	instanceId     string
+}
+type URLMessage struct {
+	OriginalURL string `json:"original_url"`
+	Shortened   string `json:"shortened"`
+	UserID      string `json:"user_id"`
+	Counter     int    `json:"counter"`
 }
 
-var UrlServiceInstance *UrlService;
+var UrlServiceInstance *UrlService
 
-
-func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Postgres) *UrlService {
+func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Postgres, RabbitMQClient *stores.RabbitMQ) *UrlService {
 	UrlServiceInstance = &UrlService{
 		ctx:            context.Background(),
 		cacheTimeout:   24 * time.Hour,
 		redisClient:    redisClient,
 		postgresClient: postgresClient,
-		cacheMutex: sync.RWMutex{},
-		errorChan: make(chan error, 100),
-		instanceId: uuid.New().String()[0:8],
+		RabbitMQClient: stores.RabbitMQClient,
+		cacheMutex:     sync.RWMutex{},
+		errorChan:      make(chan error, 100),
+		instanceId:     uuid.New().String()[0:8],
 	}
-	
+
 	go UrlServiceInstance.handleErrors()
 
 	return UrlServiceInstance
@@ -64,39 +68,145 @@ func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Post
 
 func (s *UrlService) GetURL(shortenedURL string) (*CachedURL, error) {
 
-    var cachedData *CachedURL
-    var err error
+	var cachedData *CachedURL
+	var err error
 
-    for i := 0; i < maxRetries; i++ {
-        s.cacheMutex.RLock()
-        cachedData, err = s.getFromCache(shortenedURL)
-        s.cacheMutex.RUnlock()
+	cachedData, err = s.getFromCache(shortenedURL)
+	if err == nil {
+		return cachedData, nil
+	}
 
-        if err == nil {
-            return cachedData, nil
-        }
-        log.Warnf("Cache miss or error on attempt %d: %v", i+1, err)
-        
-        time.Sleep(baseDelay * (1 << i))
-    }
+	url, err := s.getFromDB(shortenedURL)
+	if err != nil {
+		return nil, err
+	}
 
-    log.Warn("Falling back to database due to repeated cache read failure.")
-    url, err := s.getFromDB(shortenedURL)
-    if err != nil {
-        return nil, err
-    }
-
-    go func() {
-        if cacheErr := s.setCache(shortenedURL, url); cacheErr != nil {
-            s.errorChan <- fmt.Errorf("cache update failed for %s: %w", shortenedURL, cacheErr)
-        }
-    }()
-
-    return url, nil
+	return url, nil
 }
+
+func (s *UrlService) CreateURL(port string, originalURL string, userIDStr string) (string, error) {
+	baseHash := utils.Hash(originalURL)
+	shortenedURL := baseHash
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid user ID: %v", err)
+	}
+
+	message := URLMessage{
+		OriginalURL: originalURL,
+		Shortened:   shortenedURL,
+		UserID:      userID.String(),
+		Counter:     0,
+	}
+
+	messageBody, err := json.Marshal(message)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal message: %v", err)
+	}
+
+	err = stores.RabbitMQClient.Channel.Publish(
+		"",
+		"queue-based-load-leveling-" + port,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "application/json",
+			Body:        messageBody,
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to publish message: %v", err)
+	}
+
+	return shortenedURL, nil
+}
+
+func (s *UrlService) ProcessQueueBatch(port string, consumerTag string, batchSize int, batchTimeout time.Duration) {
+	msgs, err := stores.RabbitMQClient.Channel.Consume(
+		"queue-based-load-leveling-" + port, 
+		consumerTag,                
+		false,                       
+		false,                     
+		false,                       
+		false,                      
+		nil,  
+	)
+	if err != nil {
+		log.Fatalf("Failed to register consumer: %v", err)
+	}
+
+
+	batch := make([]URLMessage, 0, batchSize)
+	timer := time.NewTimer(batchTimeout)
+
+	for {
+		select {
+		case msg := <-msgs:
+			var urlMessage URLMessage
+			if err := json.Unmarshal(msg.Body, &urlMessage); err != nil {
+				log.Printf("Consumer %s: Failed to unmarshal message: %v", consumerTag, err)
+				msg.Nack(false, false)
+				continue
+			}
+
+			batch = append(batch, urlMessage)
+
+			msg.Ack(false)
+
+			if len(batch) >= batchSize {
+				s.processBatch(batch)
+				batch = batch[:0]
+				timer.Reset(batchTimeout)
+			}
+
+		case <-timer.C:
+			if len(batch) > 0 {
+				s.processBatch(batch)
+				batch = batch[:0]
+			}
+			timer.Reset(batchTimeout)
+		}
+	}
+}
+
+func (s *UrlService) processBatch(batch []URLMessage) {
+	if len(batch) == 0 {
+		return
+	}
+
+	params := sqlc.BatchInsertURLsParams{
+		Column1: make([]string, len(batch)),
+		Column2: make([]string, len(batch)),
+		Column3: make([]int64, len(batch)),
+		Column4: make([]pgtype.Timestamptz, len(batch)),
+		Column5: make([]pgtype.Timestamptz, len(batch)),
+		Column6: make([]pgtype.UUID, len(batch)),
+	}
+
+	for i, message := range batch {
+		params.Column1[i] = message.Shortened
+		params.Column2[i] = message.OriginalURL
+		params.Column3[i] = int64(message.Counter)
+		params.Column4[i] = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+		params.Column5[i] = pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour * 100), Valid: true}
+		params.Column6[i] = pgtype.UUID{
+			Bytes: uuid.MustParse(message.UserID),
+			Valid: true,
+		}
+	}
+
+	err := s.postgresClient.Queries.BatchInsertURLs(s.ctx, params)
+	if err != nil {
+		log.Printf("Failed to insert batch: %v", err)
+	} else {
+		fmt.Println("Successful append size ", len(batch));
+	}
+}
+
 func (s *UrlService) IncrementClicks(shortenedURL string) (*CachedURL, error) {
 	var updatedURL *CachedURL
-	
+
 	s.cacheMutex.Lock()
 	defer s.cacheMutex.Unlock()
 
@@ -104,7 +214,7 @@ func (s *UrlService) IncrementClicks(shortenedURL string) (*CachedURL, error) {
 	if err == nil {
 		cachedURL.Clicks++
 		updatedURL = cachedURL
-		
+
 		if err := s.setCache(shortenedURL, cachedURL); err != nil {
 			log.Errorf("Failed to update clicks in cache for %s: %v", shortenedURL, err)
 		}
@@ -113,9 +223,9 @@ func (s *UrlService) IncrementClicks(shortenedURL string) (*CachedURL, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to get URL from database: %v", err)
 		}
-		dbURL.Clicks++ 
+		dbURL.Clicks++
 		updatedURL = dbURL
-		
+
 		if err := s.setCache(shortenedURL, dbURL); err != nil {
 			log.Errorf("Failed to set cache for %s: %v", shortenedURL, err)
 		}
@@ -131,83 +241,21 @@ func (s *UrlService) IncrementClicks(shortenedURL string) (*CachedURL, error) {
 	return updatedURL, nil
 }
 
-
 func (s *UrlService) DeleteURL(shortenedURL string) error {
-    go func() {
-        if err := s.postgresClient.Queries.DeleteURL(s.ctx, shortenedURL); err != nil {
-            log.Errorf("failed to delete URL from database: %v", err)
-        }
-    }()
+	go func() {
+		if err := s.postgresClient.Queries.DeleteURL(s.ctx, shortenedURL); err != nil {
+			log.Errorf("failed to delete URL from database: %v", err)
+		}
+	}()
 
 	if err := s.redisClient.Del(s.ctx, shortenedURL).Err(); err != nil {
-        return fmt.Errorf("failed to delete URL from cache: %v", err)
-    }
-
-    return nil
-}
-
-
-func (s *UrlService) CreateURL(originalURL string, userIDStr string) (sqlc.Url, error) {
-	baseHash := utils.Hash(originalURL)
-	shortenedURL := baseHash
-	counter := 0
-	
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		return sqlc.Url{}, fmt.Errorf("invalid user ID: %v", err)
-	}
-	for {
-		urlParams := sqlc.InsertURLParams{
-			Shortened: shortenedURL,
-			Original:  originalURL,
-			UserID: pgtype.UUID{
-				Bytes: userID,
-				Valid: true,
-			},
-		}
-		newURL, err := s.postgresClient.Queries.InsertURL(s.ctx, urlParams)
-		if err != nil {
-			if utils.IsPgUniqueViolation(err) {
-				counter++
-				shortenedURL = fmt.Sprintf("%s%d", baseHash, counter)
-				continue 
-			}
-			return sqlc.Url{}, fmt.Errorf("failed to create URL in database: %v", err)
-		}
-		
-		go func() {
-			cachedURL := &CachedURL{
-				Original:  originalURL,
-				Clicks:    0,
-				CreatedAt: time.Now(),
-				UserID:    userIDStr,
-			}
-			if err := s.setCache(urlParams.Shortened, cachedURL); err != nil {
-				s.errorChan <- fmt.Errorf("cache set failed for new URL %s: %w", urlParams.Shortened, err)
-			}
-		}()
-	
-		return newURL, nil
-	}
-}
-
-
-func (s *UrlService) CreateUser(userIDStr string) error {
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		return fmt.Errorf(err.Error())
-	}
-	err = s.postgresClient.Queries.InsertUser(context.Background(), utils.ConvertFromUuidPg(userID))
-
-	if err != nil {
-		return fmt.Errorf(err.Error())
+		return fmt.Errorf("failed to delete URL from cache: %v", err)
 	}
 
 	return nil
 }
 
-
-func (s *UrlService) GetURLs(userId string) []CachedURL{
+func (s *UrlService) GetURLs(userId string) []CachedURL {
 	userID, err := uuid.Parse(userId)
 	if err != nil {
 		log.Errorf("Failed to parse user ID: %v", err)
@@ -259,15 +307,12 @@ func (s *UrlService) DeleteExpiredURLs() error {
 		wg.Wait()
 	}
 
-	// Delete from DB
 	if err := s.postgresClient.Queries.DeleteExpiredURLs(s.ctx); err != nil {
 		return fmt.Errorf("failed to delete expired URLs from DB: %w", err)
 	}
 
 	return nil
 }
-
-
 
 func (s *UrlService) getFromCache(shortenedURL string) (*CachedURL, error) {
 	data, err := s.redisClient.Get(s.ctx, shortenedURL).Result()
@@ -311,7 +356,6 @@ func (s *UrlService) setCache(shortenedURL string, url *CachedURL) error {
 	if err != nil {
 		return err
 	}
-
 	return s.redisClient.Set(s.ctx, shortenedURL, data, s.cacheTimeout).Err()
 }
 
@@ -321,7 +365,7 @@ func (s *UrlService) StartCacheSyncWorker(interval time.Duration) {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			s.syncCacheWithDB() 
+			s.syncCacheWithDB()
 		}
 	}()
 }

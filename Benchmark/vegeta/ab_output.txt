@@ -1,0 +1,44 @@
+This is ApacheBench, Version 2.3 <$Revision: 1903618 $>
+Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
+Licensed to The Apache Software Foundation, http://www.apache.org/
+
+Benchmarking localhost (be patient)
+
+
+Server Software:        nginx/1.22.0
+Server Hostname:        localhost
+Server Port:            3001
+
+Document Path:          /short/CCaICRin
+Document Length:        75 bytes
+
+Concurrency Level:      10000
+Time taken for tests:   11.052 seconds
+Complete requests:      100000
+Failed requests:        1064
+   (Connect: 0, Receive: 0, Length: 1064, Exceptions: 0)
+Non-2xx responses:      1064
+Total transferred:      24817040 bytes
+HTML transferred:       7618104 bytes
+Requests per second:    9048.51 [#/sec] (mean)
+Time per request:       1105.155 [ms] (mean)
+Time per request:       0.111 [ms] (mean, across all concurrent requests)
+Transfer rate:          2192.94 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0  397 254.2    363    1424
+Processing:    47  664 223.6    636    2182
+Waiting:        1  549 218.5    515    2047
+Total:         55 1062 346.7    998    2960
+
+Percentage of the requests served within a certain time (ms)
+  50%    998
+  66%   1048
+  75%   1100
+  80%   1158
+  90%   1408
+  95%   1883
+  98%   2140
+  99%   2267
+ 100%   2960 (longest request)

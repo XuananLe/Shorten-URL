@@ -17,6 +17,71 @@ type Url struct {
 	UserID    pgtype.UUID
 }
 
+type UrlsP0 struct {
+	Shortened string
+	Original  string
+	Clicks    pgtype.Int8
+	CreatedAt pgtype.Timestamptz
+	ExpiredAt pgtype.Timestamptz
+	UserID    pgtype.UUID
+}
+
+type UrlsP1 struct {
+	Shortened string
+	Original  string
+	Clicks    pgtype.Int8
+	CreatedAt pgtype.Timestamptz
+	ExpiredAt pgtype.Timestamptz
+	UserID    pgtype.UUID
+}
+
+type UrlsP2 struct {
+	Shortened string
+	Original  string
+	Clicks    pgtype.Int8
+	CreatedAt pgtype.Timestamptz
+	ExpiredAt pgtype.Timestamptz
+	UserID    pgtype.UUID
+}
+
+type UrlsP3 struct {
+	Shortened string
+	Original  string
+	Clicks    pgtype.Int8
+	CreatedAt pgtype.Timestamptz
+	ExpiredAt pgtype.Timestamptz
+	UserID    pgtype.UUID
+}
+
+type UrlsP4 struct {
+	Shortened string
+	Original  string
+	Clicks    pgtype.Int8
+	CreatedAt pgtype.Timestamptz
+	ExpiredAt pgtype.Timestamptz
+	UserID    pgtype.UUID
+}
+
 type User struct {
+	UserID pgtype.UUID
+}
+
+type Users0 struct {
+	UserID pgtype.UUID
+}
+
+type Users1 struct {
+	UserID pgtype.UUID
+}
+
+type Users2 struct {
+	UserID pgtype.UUID
+}
+
+type Users3 struct {
+	UserID pgtype.UUID
+}
+
+type Users4 struct {
 	UserID pgtype.UUID
 }
