@@ -41,6 +41,7 @@ func loadFeatureFlags(configFile string) (FeatureFlags, error) {
 }
 
 func main() {
+	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 10000;
 	flags, err := loadFeatureFlags("feature.json")
 	if err != nil {
 		log.Fatalf("Failed to load feature flags: %v", err)
@@ -87,7 +88,7 @@ func main() {
 	defer c.Stop()
 
 	config.LoadEnv()
-	stores.InitRedis("41943040", "volatile-lru")
+	stores.InitRedis("2gb", "volatile-lru")
 	stores.InitPostgres()
 	stores.InitRabbitMQ()
 	stores.RabbitMQClient.DeclareQueue("queue-based-load-leveling-" + *port)
@@ -125,6 +126,7 @@ func main() {
 	r.Use(middleware.StripSlashes)
 
 	r.Get("/short/{id}", func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now();
 		shortenedURL := chi.URLParam(r, "id")
 		if shortenedURL == "" {
 			http.Error(w, "Missing ID", http.StatusBadRequest)
@@ -146,6 +148,9 @@ func main() {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		if (time.Since(start) >= 100 * time.Millisecond) {
+			log.Fatal("Damn boi, we timed out")
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"originalUrl": originalURL.Original,
 		})

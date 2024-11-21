@@ -14,6 +14,7 @@ import (
 	"shorten-url/backend/pkg/utils"
 	"sync"
 	"time"
+	"github.com/bits-and-blooms/bloom/v3"
 )
 
 const (
@@ -29,7 +30,6 @@ type CachedURL struct {
 	ExpiredAt time.Time `json:"expired_at,omitempty"`
 	UserID    string    `json:"user_id,omitempty"`
 }
-
 type UrlService struct {
 	ctx            context.Context
 	cacheTimeout   time.Duration
@@ -37,6 +37,7 @@ type UrlService struct {
 	postgresClient *stores.Postgres
 	RabbitMQClient *stores.RabbitMQ
 	cacheMutex     sync.RWMutex
+	bloomFilter   *bloom.BloomFilter
 	errorChan      chan error
 	instanceId     string
 }
@@ -50,6 +51,7 @@ type URLMessage struct {
 var UrlServiceInstance *UrlService
 
 func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Postgres, RabbitMQClient *stores.RabbitMQ) *UrlService {
+	bloomFilter := bloom.NewWithEstimates(100000, 0.01)
 	UrlServiceInstance = &UrlService{
 		ctx:            context.Background(),
 		cacheTimeout:   24 * time.Hour,
@@ -59,6 +61,7 @@ func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Post
 		cacheMutex:     sync.RWMutex{},
 		errorChan:      make(chan error, 100),
 		instanceId:     uuid.New().String()[0:8],
+		bloomFilter:   bloomFilter,
 	}
 
 	go UrlServiceInstance.handleErrors()
@@ -67,21 +70,28 @@ func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Post
 }
 
 func (s *UrlService) GetURL(shortenedURL string) (*CachedURL, error) {
+    if !s.bloomFilter.TestString(shortenedURL) {
+		fmt.Println("Bloom Filter does not contain the key ", shortenedURL);
+        return nil, fmt.Errorf("URL not found")
+    }
 
-	var cachedData *CachedURL
-	var err error
+    cachedURL, err := s.getFromCache(shortenedURL)
+    if err == nil {
+        return cachedURL, nil
+    }
 
-	cachedData, err = s.getFromCache(shortenedURL)
-	if err == nil {
-		return cachedData, nil
-	}
+    url, err := s.getFromDB(shortenedURL)
+    if err != nil {
+        return nil, fmt.Errorf("failed to fetch from DB: %w", err)
+    }
 
-	url, err := s.getFromDB(shortenedURL)
-	if err != nil {
-		return nil, err
-	}
+    go func() {
+        if err := s.setCache(shortenedURL, url); err != nil {
+            log.Errorf("Failed to update cache for %s: %v", shortenedURL, err)
+        }
+    }()
 
-	return url, nil
+    return url, nil
 }
 
 func (s *UrlService) CreateURL(port string, originalURL string, userIDStr string) (string, error) {
@@ -118,56 +128,50 @@ func (s *UrlService) CreateURL(port string, originalURL string, userIDStr string
 	if err != nil {
 		return "", fmt.Errorf("failed to publish message: %v", err)
 	}
+	s.bloomFilter.AddString(shortenedURL);
 
 	return shortenedURL, nil
 }
 
-func (s *UrlService) ProcessQueueBatch(port string, consumerTag string, batchSize int, batchTimeout time.Duration) {
-	msgs, err := stores.RabbitMQClient.Channel.Consume(
-		"queue-based-load-leveling-" + port, 
-		consumerTag,                
-		false,                       
-		false,                     
-		false,                       
-		false,                      
-		nil,  
-	)
-	if err != nil {
-		log.Fatalf("Failed to register consumer: %v", err)
-	}
+func (s *UrlService) ProcessQueueBatch(port, consumerTag string, batchSize int, batchTimeout time.Duration) {
+    msgs, err := stores.RabbitMQClient.Channel.Consume(
+        "queue-based-load-leveling-"+port, consumerTag, false, false, false, false, nil,
+    )
+    if err != nil {
+        log.Fatalf("Failed to register consumer: %v", err)
+    }
 
+    batch := make([]URLMessage, 0, batchSize)
+    timer := time.NewTimer(batchTimeout)
+    defer timer.Stop()
 
-	batch := make([]URLMessage, 0, batchSize)
-	timer := time.NewTimer(batchTimeout)
+    for {
+        select {
+        case msg := <-msgs:
+            if len(batch) >= batchSize {
+                s.processBatch(batch)
+                batch = batch[:0]
+                timer.Reset(batchTimeout)
+            }
 
-	for {
-		select {
-		case msg := <-msgs:
-			var urlMessage URLMessage
-			if err := json.Unmarshal(msg.Body, &urlMessage); err != nil {
-				log.Printf("Consumer %s: Failed to unmarshal message: %v", consumerTag, err)
-				msg.Nack(false, false)
-				continue
-			}
+            var urlMessage URLMessage
+            if err := json.Unmarshal(msg.Body, &urlMessage); err != nil {
+                log.Errorf("Invalid message: %v", err)
+                msg.Nack(false, false)
+                continue
+            }
 
-			batch = append(batch, urlMessage)
+            batch = append(batch, urlMessage)
+            msg.Ack(false)
 
-			msg.Ack(false)
-
-			if len(batch) >= batchSize {
-				s.processBatch(batch)
-				batch = batch[:0]
-				timer.Reset(batchTimeout)
-			}
-
-		case <-timer.C:
-			if len(batch) > 0 {
-				s.processBatch(batch)
-				batch = batch[:0]
-			}
-			timer.Reset(batchTimeout)
-		}
-	}
+        case <-timer.C:
+            if len(batch) > 0 {
+                s.processBatch(batch)
+                batch = batch[:0]
+            }
+            timer.Reset(batchTimeout)
+        }
+    }
 }
 
 func (s *UrlService) processBatch(batch []URLMessage) {
@@ -251,6 +255,9 @@ func (s *UrlService) DeleteURL(shortenedURL string) error {
 	if err := s.redisClient.Del(s.ctx, shortenedURL).Err(); err != nil {
 		return fmt.Errorf("failed to delete URL from cache: %v", err)
 	}
+
+	// Log deletion (Bloom Filter will not remove the key)
+	log.Infof("Key %s deleted. Note: Bloom Filter retains this key.", shortenedURL)
 
 	return nil
 }

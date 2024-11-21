@@ -1,2 +1,1 @@
-POST http://localhost:3001/create?url=https://kubernetes.io/docs/concepts/overview/components/&userId=1c8be2ab-694d-40a1-acda-6d2ff09e8b76
-Content-Type: application/x-www-form-urlencoded
+GET http://localhost:3001/short/7J3Bb6PW
