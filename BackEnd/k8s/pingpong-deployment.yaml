@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: De
+metadata:
+  name: pingpong
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pingpong
+  template:
+    metadata:
+      labels:
+        app: pingpong
+    spec:
+      containers:
+      - name: pingpong
+        image: alpine:latest
+        command: ["sh", "-c", "ping 1.1.1.1"]

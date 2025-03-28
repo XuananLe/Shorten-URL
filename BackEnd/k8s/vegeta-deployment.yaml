@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vegeta
+spec:
+  replicas: 3 # Number of Vegeta pods to distribute load
+  selector:
+    matchLabels:
+      app: vegeta
+  template:
+    metadata:
+      labels:
+        app: vegeta
+    spec:
+      containers:
+      - name: vegeta
+        image: peterevans/vegeta:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          cat /etc/vegeta/targets | vegeta attack -duration=30s -rate=100 | vegeta report; sleep 3600;
+        volumeMounts:
+        - name: vegeta-targets
+          mountPath: /etc/vegeta
+        
+      volumes:
+      - name: vegeta-targets
+        configMap:
+          name: vegeta-targets

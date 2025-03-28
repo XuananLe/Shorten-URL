@@ -1,0 +1,1 @@
+ab -n 100000 -c 10000 http://localhost:3001/short/DJJxQATq> ab_output.txt && cat ab_output.txt

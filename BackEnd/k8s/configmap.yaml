@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  DB_NAME: url-shortener
+  DB_USERNAME: postgres
+  DB_HOST: localhost
+  DB_PORT: "5432"
+  SERVER_PORT: "3013"
+  REDIS_HOST: localhost
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  REDIS_CLUSTER_NODES: "7000,7001,7002,7003,7004,7005"
+  REDIS_USER: default
+  NGINX_PORT: "3001"
+  KAFKA_BROKER_URL: kafka://localhost:9092
+  KAFKA_TOPIC: my_topic
+  KAFKA_GROUP_ID: my_group
+  RABBITMQ_HOST: amqp://guest:guest@localhost:5672/

@@ -51,7 +51,7 @@ type URLMessage struct {
 var UrlServiceInstance *UrlService
 
 func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Postgres, RabbitMQClient *stores.RabbitMQ) *UrlService {
-	bloomFilter := bloom.NewWithEstimates(100000, 0.01)
+	bloomFilter := bloom.NewWithEstimates(100000000, 0.01)
 	UrlServiceInstance = &UrlService{
 		ctx:            context.Background(),
 		cacheTimeout:   24 * time.Hour,
@@ -70,10 +70,9 @@ func NewUrlService(redisClient *redis.ClusterClient, postgresClient *stores.Post
 }
 
 func (s *UrlService) GetURL(shortenedURL string) (*CachedURL, error) {
-    if !s.bloomFilter.TestString(shortenedURL) {
-		fmt.Println("Bloom Filter does not contain the key ", shortenedURL);
-        return nil, fmt.Errorf("URL not found")
-    }
+    // if !s.bloomFilter.TestString(shortenedURL) {
+    //     return nil, fmt.Errorf("URL not found")
+    // }
 
     cachedURL, err := s.getFromCache(shortenedURL)
     if err == nil {
@@ -128,7 +127,7 @@ func (s *UrlService) CreateURL(port string, originalURL string, userIDStr string
 	if err != nil {
 		return "", fmt.Errorf("failed to publish message: %v", err)
 	}
-	s.bloomFilter.AddString(shortenedURL);
+	// s.bloomFilter.AddString(shortenedURL);
 
 	return shortenedURL, nil
 }

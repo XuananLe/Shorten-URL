@@ -41,7 +41,7 @@ func loadFeatureFlags(configFile string) (FeatureFlags, error) {
 }
 
 func main() {
-	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 10000;
+	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 10000
 	flags, err := loadFeatureFlags("feature.json")
 	if err != nil {
 		log.Fatalf("Failed to load feature flags: %v", err)
@@ -94,14 +94,13 @@ func main() {
 	stores.RabbitMQClient.DeclareQueue("queue-based-load-leveling-" + *port)
 	services.NewUrlService(stores.RedisCluster, stores.PostgresClient, stores.RabbitMQClient)
 
-
 	defer stores.PostgresClient.DB.Close()
 	defer stores.RedisCluster.Close()
 	defer stores.CloseRabbitMQ()
 
 	numConsumers := 10
 	for i := 1; i <= numConsumers; i++ {
-		go services.UrlServiceInstance.ProcessQueueBatch(*port,fmt.Sprintf("consumer-%d", i), 100, 5*time.Second)
+		go services.UrlServiceInstance.ProcessQueueBatch(*port, fmt.Sprintf("consumer-%d", i), 100, 5*time.Second)
 	}
 
 	r := chi.NewRouter()
@@ -126,7 +125,6 @@ func main() {
 	r.Use(middleware.StripSlashes)
 
 	r.Get("/short/{id}", func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now();
 		shortenedURL := chi.URLParam(r, "id")
 		if shortenedURL == "" {
 			http.Error(w, "Missing ID", http.StatusBadRequest)
@@ -148,9 +146,6 @@ func main() {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		if (time.Since(start) >= 100 * time.Millisecond) {
-			log.Fatal("Damn boi, we timed out")
-		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"originalUrl": originalURL.Original,
 		})

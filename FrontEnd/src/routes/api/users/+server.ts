@@ -2,7 +2,8 @@ import { API_GATEWAY } from '$lib';
 import { json } from '@sveltejs/kit';
 import ky from 'ky';
 
-export async function POST({ request }) {
+// @ts-ignore
+export async function POST({request}) {
     try {
         const { userId } = await request.json();
 
